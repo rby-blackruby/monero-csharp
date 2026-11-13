@@ -708,11 +708,11 @@ public class MoneroWalletRpcIntegrationTest : MoneroIntegrationTestBase
         Assert.That(result.AccountIndex, Is.EqualTo(accountIdx));
         Assert.That(result.Index, Is.EqualTo(created.Index));
 
-        // looking up a valid address that does not belong to the wallet should throw MoneroError with code -2
-        MoneroError? ex = await Assert.ThrowsAsync<MoneroError>(async () =>
+        // looking up a valid address that does not belong to the wallet should throw MoneroRpcError with code -2
+        MoneroRpcError? ex = await Assert.ThrowsAsync<MoneroRpcError>(async () =>
             await Wallet.GetAddressIndex(
                 "9tUBnNCkC3UKGygHCwYvAB1FscpjUuq5e9MYJd2rXuiiTjjfVeSVjnbSG5VTnJgBgy9Y7GTLfxpZNMUwNZjGfdFr1z79eV1"));
-        Assert.That(ex!.GetCode(), Is.EqualTo(-2));
+        Assert.That(ex!.GetWalletRpcErrorCode(), Is.EqualTo(MoneroWalletRpcErrorCode.WrongAddress));
     }
 
     // Can get the index of the primary address
