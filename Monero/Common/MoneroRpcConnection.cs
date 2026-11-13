@@ -20,7 +20,7 @@ public class MoneroRpcConnection(Uri uri, string username, string password, Http
         CancellationToken cts = default)
     {
         var jsonSerializer = new JsonSerializerOptions(JsonSerializerDefaults.Web);
-        var httpRequest = new HttpRequestMessage
+        using var httpRequest = new HttpRequestMessage
         {
             Method = HttpMethod.Post,
             RequestUri = new Uri(uri, "json_rpc"),
@@ -33,9 +33,38 @@ public class MoneroRpcConnection(Uri uri, string username, string password, Http
         httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Basic",
             Convert.ToBase64String(Encoding.Default.GetBytes($"{_username}:{_password}")));
 
-        HttpResponseMessage rawResult = await _httpClient.SendAsync(httpRequest, cts);
-        rawResult.EnsureSuccessStatusCode();
-        var rawJson = await rawResult.Content.ReadAsStringAsync(cts);
+        string rawJson;
+        HttpStatusCode statusCode;
+        string? reasonPhrase;
+        bool isSuccessStatusCode;
+        try
+        {
+            using HttpResponseMessage rawResult = await _httpClient.SendAsync(httpRequest, cts);
+            statusCode = rawResult.StatusCode;
+            reasonPhrase = rawResult.ReasonPhrase;
+            isSuccessStatusCode = rawResult.IsSuccessStatusCode;
+            rawJson = await rawResult.Content.ReadAsStringAsync(cts);
+        }
+        catch (OperationCanceledException) when (cts.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception e)
+        {
+            throw new MoneroRpcError(e.Message, null, method, data);
+        }
+
+        if (!isSuccessStatusCode)
+        {
+            int code = (int)statusCode;
+            string message = $"{code} {reasonPhrase}";
+            if (!string.IsNullOrEmpty(rawJson))
+            {
+                message += $": {rawJson}";
+            }
+
+            throw new MoneroRpcError(message, code, method, data);
+        }
 
         JsonRpcResponse<TResponse>? response;
         try
@@ -44,19 +73,21 @@ public class MoneroRpcConnection(Uri uri, string username, string password, Http
         }
         catch (Exception e)
         {
-            Console.WriteLine(e.Message);
-            Console.WriteLine(rawJson);
-            throw;
+            throw new MoneroRpcError($"Failed to deserialize RPC response for method '{method}': {e.Message}", null,
+                method, data);
         }
 
         if (response == null)
         {
-            throw new JsonRpcApiException(new JsonRpcResponseError(500, "Response is null", new Object()));
+            throw new MoneroRpcInvalidResponseError(method, uri, data);
         }
 
         if (response.Error != null)
         {
-            throw new JsonRpcApiException(response.Error);
+            string message = string.IsNullOrEmpty(response.Error.Message)
+                ? $"Received error response from RPC request with method '{method}' to {uri.AbsoluteUri}"
+                : response.Error.Message;
+            throw new MoneroRpcError(message, response.Error.Code, method, data);
         }
 
         return response.Result;
