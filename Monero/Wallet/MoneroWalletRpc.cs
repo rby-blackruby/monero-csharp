@@ -1,3 +1,5 @@
+using System.Runtime.ExceptionServices;
+
 using Monero.Common;
 using Monero.Daemon.Common;
 using Monero.Wallet.Common;
@@ -10,8 +12,6 @@ namespace Monero.Wallet;
 public class MoneroWalletRpc : IMoneroWallet
 {
     // class variables
-    private const int ErrorCodeInvalidPaymentId = -5; // invalid payment id error code
-
     private const ulong
         DefaultSyncPeriodInMs =
             20000; // default period between syncs in ms (defined by DEFAULT_AUTO_REFRESH_PERIOD in wallet_rpc_server.cpp)
@@ -149,7 +149,7 @@ public class MoneroWalletRpc : IMoneroWallet
 
         MoneroJsonRpcParams parameters = PrepareWalletCreationParameters(config);
         try { await _rpc.SendCommandAsync<MoneroJsonRpcParams, MoneroRpcResponse>("create_wallet", parameters); }
-        catch (JsonRpcApiException e) { HandleCreateWalletError(config.GetPath(), e); }
+        catch (MoneroRpcError e) { HandleCreateWalletError(config.GetPath(), e); }
 
         Clear();
         _path = config.GetPath();
@@ -181,7 +181,7 @@ public class MoneroWalletRpc : IMoneroWallet
         parameters.Add("enable_multisig_experimental", config.IsMultisig());
 
         try { await _rpc.SendCommandAsync<MoneroJsonRpcParams, MoneroRpcResponse>("restore_deterministic_wallet", parameters); }
-        catch (JsonRpcApiException e) { HandleCreateWalletError(config.GetPath(), e); }
+        catch (MoneroRpcError e) { HandleCreateWalletError(config.GetPath(), e); }
 
         Clear();
         _path = config.GetPath();
@@ -212,13 +212,13 @@ public class MoneroWalletRpc : IMoneroWallet
         };
 
         try { await _rpc.SendCommandAsync<GenerateFromKeysRequest, GenerateFromKeysResponse>("generate_from_keys", generateFromKeysRequest); }
-        catch (JsonRpcApiException e) { HandleCreateWalletError(config.GetPath(), e); }
+        catch (MoneroRpcError e) { HandleCreateWalletError(config.GetPath(), e); }
 
         Clear();
         _path = config.GetPath();
     }
 
-    private static void HandleCreateWalletError(string? name, JsonRpcApiException? e)
+    private static void HandleCreateWalletError(string? name, MoneroRpcError? e)
     {
         if (e == null)
         {
@@ -227,15 +227,17 @@ public class MoneroWalletRpc : IMoneroWallet
 
         if (e.Message.Equals("Cannot create wallet. Already exists."))
         {
-            throw new MoneroRpcError("Wallet already exists: " + (name ?? "unknown"), e.Error.Code);
+            throw new MoneroRpcError("Wallet already exists: " + (name ?? "unknown"), e.GetCode(), e.GetRpcMethod(),
+                e.GetRpcParams());
         }
 
         if (e.Message.Equals("Electrum-style word list failed verification"))
         {
-            throw new MoneroRpcError("Invalid mnemonic", e.Error.Code);
+            throw new MoneroRpcError("Invalid mnemonic", e.GetCode(), e.GetRpcMethod(), e.GetRpcParams());
         }
 
-        throw e;
+        // Use this instead of just throw e; so the original stack trace is preseved!
+        ExceptionDispatchInfo.Throw(e);
     }
 
     private static void HandleInvalidTxIdError(MoneroRpcError? e)
@@ -245,13 +247,12 @@ public class MoneroWalletRpc : IMoneroWallet
             throw new MoneroError("Cannot parse invalid tx id error");
         }
 
-        if (-8 == e.GetCode() && e.Message.Contains("TX ID has invalid format"))
+        if (e.HasCode(MoneroWalletRpcErrorCode.WrongTxId) && e.Message.Contains("TX ID has invalid format"))
         {
-            e = new MoneroRpcError("TX hash has invalid format", e.GetCode(), e.GetRpcMethod(),
-                e.GetRpcParams()); // normalize error message
+            throw new MoneroRpcError("TX hash has invalid format", e.GetCode(), e.GetRpcMethod(), e.GetRpcParams());
         }
 
-        throw new MoneroRpcError(e);
+        ExceptionDispatchInfo.Throw(e);
     }
 
     #endregion
@@ -292,12 +293,12 @@ public class MoneroWalletRpc : IMoneroWallet
         }
         catch (MoneroError e)
         {
-            if (-29 == e.GetCode())
+            if (e.HasCode(MoneroWalletRpcErrorCode.WatchOnly))
             {
                 return true; // wallet is view-only
             }
 
-            if (-1 == e.GetCode())
+            if (e.HasCode(MoneroWalletRpcErrorCode.UnknownError))
             {
                 return false; // wallet is offline but not view-only
             }
@@ -358,7 +359,7 @@ public class MoneroWalletRpc : IMoneroWallet
                 ""); // TODO (monero-project): provide better way to know if wallet rpc is connected to daemon
             throw new Exception("check reserve expected to fail");
         }
-        catch (JsonRpcApiException e)
+        catch (MoneroRpcError e)
         {
             return !e.Message.Contains("Failed to connect to daemon");
         }
@@ -449,13 +450,9 @@ public class MoneroWalletRpc : IMoneroWallet
             parameters.Add("address", address);
             response = await _rpc.SendCommandAsync<MoneroJsonRpcParams, GetAddressIndexResponse>("get_address_index", parameters);
         }
-        catch (JsonRpcApiException e)
+        catch (MoneroRpcError e)
         {
             MoneroUtils.Log(0, e.Message);
-            if (-2 == e.Error.Code)
-            {
-                throw new MoneroError(e.Message, e.Error.Code);
-            }
 
             throw;
         }
@@ -477,7 +474,10 @@ public class MoneroWalletRpc : IMoneroWallet
         {
             if (e.Message.Contains("Invalid payment ID"))
             {
-                throw new MoneroError("Invalid payment ID: " + paymentId, ErrorCodeInvalidPaymentId);
+                // Throw MoneroRpcError rather than a plain MoneroError so callers doing `catch (MoneroRpcError)`
+                // still see this failure as an RPC error. Attach method and params are for debugging
+                throw new MoneroRpcError("Invalid payment ID: " + paymentId,
+                    MoneroWalletRpcErrorCode.WrongPaymentId.ToCode(), e.GetRpcMethod(), e.GetRpcParams());
             }
 
             throw;
@@ -946,7 +946,7 @@ public class MoneroWalletRpc : IMoneroWallet
         }
         catch (MoneroRpcError e)
         {
-            if (-2 == e.GetCode())
+            if (e.HasCode(MoneroWalletRpcErrorCode.WrongAddress))
             {
                 return new MoneroMessageSignatureResponse();
             }
@@ -1025,9 +1025,10 @@ public class MoneroWalletRpc : IMoneroWallet
         }
         catch (MoneroRpcError e)
         {
-            if (-1 == e.GetCode() && e.Message.Equals("basic_string"))
+            if (e.HasCode(MoneroWalletRpcErrorCode.UnknownError) && e.Message.Equals("basic_string"))
             {
-                e = new MoneroRpcError("Must provide signature to check tx proof", -1);
+                e = new MoneroRpcError("Must provide signature to check tx proof",
+                    MoneroWalletRpcErrorCode.UnknownError.ToCode());
             }
 
             HandleInvalidTxIdError(e);
@@ -1244,11 +1245,11 @@ public class MoneroWalletRpc : IMoneroWallet
             GetAttributeResponse response = await _rpc.SendCommandAsync<MoneroJsonRpcParams, GetAttributeResponse>("get_attribute", parameters);
             return response.Value;
         }
-        catch (JsonRpcApiException e)
+        catch (MoneroRpcError e)
         {
-            if (-45 == e.Error.Code)
+            if (e.HasCode(MoneroWalletRpcErrorCode.AttributeNotFound))
             {
-                return null; // -45: attribute not found
+                return null;
             }
 
             throw;
@@ -1422,7 +1423,7 @@ public class MoneroWalletRpc : IMoneroWallet
         }
         catch (MoneroRpcError e)
         {
-            return e.GetCode() == -8 && e.Message.Contains("No wallet file");
+            return e.HasCode(MoneroWalletRpcErrorCode.WrongTxId) && e.Message.Contains("No wallet file");
         }
         catch
         {
