@@ -697,7 +697,7 @@ public class MoneroDaemonRpcIntegrationTest : MoneroIntegrationTestBase
         }
         catch (MoneroRpcError e)
         {
-            Assert.That(e.GetCode(), Is.EqualTo(-7));
+            Assert.That(e.GetDaemonRpcErrorCode(), Is.EqualTo(MoneroDaemonRpcErrorCode.BlockNotAccepted));
             Assert.That(e.Message, Is.EqualTo("Block not accepted"));
         }
     }
