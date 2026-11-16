@@ -134,10 +134,17 @@ public class MoneroRpcConnectionUnitTest
             """{"jsonrpc":"2.0","id":"1","error":{"code":-2,"message":"Address not in wallet"}}""");
         Dictionary<string, object?> parameters = new() { ["address"] = "bad" };
 
-        MoneroRpcError? ex = await Assert.ThrowsAsync<MoneroRpcError>(async () =>
+        MoneroRpcError? ex = await Assert.CatchAsync<MoneroRpcError>(async () =>
             await rpc.SendCommandAsync<Dictionary<string, object?>, string>("get_address_index", parameters));
 
-        Assert.That(ex!.GetCode(), Is.EqualTo(-2));
+#pragma warning disable CS0618
+        Assert.That(ex, Is.InstanceOf<JsonRpcApiException>());
+        JsonRpcApiException jsonEx = (JsonRpcApiException)ex!;
+        Assert.That(jsonEx.Error, Is.Not.Null);
+        Assert.That(jsonEx.Error.Code, Is.EqualTo(MoneroWalletRpcErrorCode.WrongAddress.ToCode()));
+        Assert.That(jsonEx.Error.Message, Is.EqualTo("Address not in wallet"));
+#pragma warning restore CS0618
+        Assert.That(ex!.GetCode(), Is.EqualTo(MoneroWalletRpcErrorCode.WrongAddress.ToCode()));
         Assert.That(ex.GetWalletRpcErrorCode(), Is.EqualTo(MoneroWalletRpcErrorCode.WrongAddress));
         Assert.That(ex.HasCode(MoneroWalletRpcErrorCode.WrongAddress), Is.True);
         Assert.That(ex.Message, Is.EqualTo("Address not in wallet"));
@@ -223,10 +230,10 @@ public class MoneroRpcConnectionUnitTest
             """{"jsonrpc":"2.0","id":"1","error":{"code":-2,"message":"Address not in wallet"}}""");
         MoneroWalletRpc wallet = new(rpc);
 
-        MoneroRpcError? ex = await Assert.ThrowsAsync<MoneroRpcError>(async () =>
+        MoneroRpcError? ex = await Assert.CatchAsync<MoneroRpcError>(async () =>
             await wallet.GetAddressIndex("bad_addr"));
 
-        Assert.That(ex!.GetCode(), Is.EqualTo(-2));
+        Assert.That(ex!.GetCode(), Is.EqualTo(MoneroWalletRpcErrorCode.WrongAddress.ToCode()));
         Assert.That(ex.GetWalletRpcErrorCode(), Is.EqualTo(MoneroWalletRpcErrorCode.WrongAddress));
         Assert.That(ex.HasCode(MoneroWalletRpcErrorCode.WrongAddress), Is.True);
         Assert.That(ex.GetRpcMethod(), Is.EqualTo("get_address_index"));
@@ -243,7 +250,7 @@ public class MoneroRpcConnectionUnitTest
         MoneroRpcError? ex = await Assert.ThrowsAsync<MoneroRpcError>(async () =>
             await wallet.GetIntegratedAddress("std_addr", "bad_pid"));
 
-        Assert.That(ex!.GetCode(), Is.EqualTo(-5));
+        Assert.That(ex!.GetCode(), Is.EqualTo(MoneroWalletRpcErrorCode.WrongPaymentId.ToCode()));
         Assert.That(ex.GetWalletRpcErrorCode(), Is.EqualTo(MoneroWalletRpcErrorCode.WrongPaymentId));
         Assert.That(ex.HasCode(MoneroWalletRpcErrorCode.WrongPaymentId), Is.True);
         Assert.That(ex.Message, Is.EqualTo("Invalid payment ID: bad_pid"));
