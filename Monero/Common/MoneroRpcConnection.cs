@@ -87,7 +87,9 @@ public class MoneroRpcConnection(Uri uri, string username, string password, Http
             string message = string.IsNullOrEmpty(response.Error.Message)
                 ? $"Received error response from RPC request with method '{method}' to {uri.AbsoluteUri}"
                 : response.Error.Message;
-            throw new MoneroRpcError(message, response.Error.Code, method, data);
+#pragma warning disable CS0618
+            throw new JsonRpcApiException(response.Error, message, method, data);
+#pragma warning restore CS0618
         }
 
         return response.Result;
