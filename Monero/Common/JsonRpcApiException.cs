@@ -1,6 +1,7 @@
 namespace Monero.Common;
 
-public class JsonRpcApiException(JsonRpcResponseError error) : Exception
+[Obsolete("Replaced by MoneroRpcError.")]
+public class JsonRpcApiException(JsonRpcResponseError error) : MoneroRpcError(error.Message, error.Code)
 {
     public JsonRpcResponseError Error { get; set; } = error;
 
