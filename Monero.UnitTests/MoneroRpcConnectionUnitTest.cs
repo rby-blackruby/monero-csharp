@@ -33,6 +33,18 @@ public class MoneroRpcConnectionUnitTest
             send(request, cancellationToken);
     }
 
+    private static string RpcErrorJson(int code, string message) =>
+        JsonSerializer.Serialize(new
+        {
+            jsonrpc = "2.0",
+            id = "1",
+            error = new { code, message }
+        });
+
+    private MoneroWalletRpc CreateWalletWithRpcError(MoneroWalletRpcErrorCode code, string message) =>
+        new(CreateRpc(HttpStatusCode.OK, RpcErrorJson(code.ToCode(), message)));
+
+
     // MoneroRpcConnection doesn't dispose its HttpClient and CreateRpc doesn't expose it,
     // so track created clients here to dispose them after each test
     private readonly List<HttpClient> _clients = [];
@@ -299,5 +311,128 @@ public class MoneroRpcConnectionUnitTest
         Assert.That(noCodeError.GetDaemonRpcErrorCode(), Is.Null);
         Assert.That(noCodeError.HasCode(MoneroWalletRpcErrorCode.UnknownError), Is.False);
         Assert.That(noCodeError.HasCode(MoneroDaemonRpcErrorCode.WrongParam), Is.False);
+    }
+
+    // Sync must release its semaphore when the RPC call fails, otherwise every later Sync() hangs forever
+    [Test]
+    public async Task TestSyncReleasesLockOnRpcError()
+    {
+        MoneroWalletRpc wallet =
+            CreateWalletWithRpcError(MoneroWalletRpcErrorCode.NoDaemonConnection, "no connection to daemon");
+
+        MoneroError? first = await Assert.CatchAsync<MoneroError>(async () => await wallet.Sync(null, null));
+        Assert.That(first!.Message, Is.EqualTo("Wallet is not connected to daemon"));
+
+        Task second = Task.Run(async () =>
+        {
+            try { await wallet.Sync(null, null); }
+            catch (MoneroError) { /* expected, we only care that it returns */ }
+        });
+        Task finished = await Task.WhenAny(second, Task.Delay(TimeSpan.FromSeconds(5)));
+
+        Assert.That(finished, Is.SameAs(second), "Sync() deadlocked: _syncSem was not released after an RPC error");
+    }
+
+    // Watch-only error (-29) means the wallet is view-only, unknown error (-1) means offline but not view-only
+    [TestCase(MoneroWalletRpcErrorCode.WatchOnly, "wallet is watch-only and has no seed", true)]
+    [TestCase(MoneroWalletRpcErrorCode.UnknownError, "wallet is offline", false)]
+    public async Task TestIsViewOnlyHandlesRpcErrors(MoneroWalletRpcErrorCode code, string message, bool expected)
+    {
+        MoneroWalletRpc wallet = CreateWalletWithRpcError(code, message);
+
+        bool isViewOnly = await wallet.IsViewOnly();
+
+        Assert.That(isViewOnly, Is.EqualTo(expected));
+    }
+
+    // "No wallet file" (-8) must report the wallet as closed instead of falling through to the catch-all
+    [Test]
+    public async Task TestIsClosedReturnsTrueWhenNoWalletFile()
+    {
+        MoneroWalletRpc wallet = CreateWalletWithRpcError(MoneroWalletRpcErrorCode.WrongTxId, "No wallet file");
+
+        bool isClosed = await wallet.IsClosed();
+
+        Assert.That(isClosed, Is.True);
+    }
+
+    // A wrong address (-2) while verifying must return a "not good" response instead of throwing
+    [Test]
+    public async Task TestVerifyMessageWrongAddressReturnsNotGood()
+    {
+        MoneroWalletRpc wallet = CreateWalletWithRpcError(MoneroWalletRpcErrorCode.WrongAddress, "Invalid address");
+
+        MoneroMessageSignatureResponse response = await wallet.VerifyMessage("msg", "bad_addr", "sig");
+
+        Assert.That(response.IsGood, Is.False);
+    }
+
+    // Invalid tx id (-8) error message is normalized to "TX hash has invalid format"
+    [Test]
+    public async Task TestGetTxKeyInvalidTxIdNormalizesMessage()
+    {
+        MoneroWalletRpc wallet =
+            CreateWalletWithRpcError(MoneroWalletRpcErrorCode.WrongTxId, "TX ID has invalid format");
+
+        MoneroRpcError? ex = await Assert.ThrowsAsync<MoneroRpcError>(async () => await wallet.GetTxKey("bad_txid"));
+
+        Assert.That(ex!.Message, Is.EqualTo("TX hash has invalid format"));
+        Assert.That(ex.HasCode(MoneroWalletRpcErrorCode.WrongTxId), Is.True);
+        Assert.That(ex.GetRpcMethod(), Is.EqualTo("get_tx_key"));
+    }
+
+    // Missing signature ("basic_string", -1) error message is normalized to a readable message
+    [Test]
+    public async Task TestCheckTxProofMissingSignatureNormalizesMessage()
+    {
+        MoneroWalletRpc wallet = CreateWalletWithRpcError(MoneroWalletRpcErrorCode.UnknownError, "basic_string");
+
+        MoneroRpcError? ex = await Assert.ThrowsAsync<MoneroRpcError>(async () =>
+            await wallet.CheckTxProof("txid", "addr", "msg", ""));
+
+        Assert.That(ex!.Message, Is.EqualTo("Must provide signature to check tx proof"));
+        Assert.That(ex.HasCode(MoneroWalletRpcErrorCode.UnknownError), Is.True);
+    }
+
+    // Attribute not found (-45) returns null instead of throwing
+    [Test]
+    public async Task TestGetAttributeNotFoundReturnsNull()
+    {
+        MoneroWalletRpc wallet =
+            CreateWalletWithRpcError(MoneroWalletRpcErrorCode.AttributeNotFound, "Attribute not found.");
+
+        string? value = await wallet.GetAttribute("missing_key");
+
+        Assert.That(value, Is.Null);
+    }
+
+    // Wallet already exists error is mapped to a MoneroRpcError that keeps code and RPC method
+    [Test]
+    public async Task TestCreateWalletAlreadyExistsMapsError()
+    {
+        MoneroWalletRpc wallet = CreateWalletWithRpcError(MoneroWalletRpcErrorCode.UnknownError,
+            "Cannot create wallet. Already exists.");
+
+        MoneroRpcError? ex = await Assert.ThrowsAsync<MoneroRpcError>(async () =>
+            await wallet.CreateWallet(new MoneroWalletConfig().SetPath("w").SetPassword("p")));
+
+        Assert.That(ex!.Message, Is.EqualTo("Wallet already exists: w"));
+        Assert.That(ex.HasCode(MoneroWalletRpcErrorCode.UnknownError), Is.True);
+        Assert.That(ex.GetRpcMethod(), Is.EqualTo("create_wallet"));
+    }
+
+    // Invalid seed error is mapped to "Invalid mnemonic" and keeps code and RPC method
+    [Test]
+    public async Task TestCreateWalletFromSeedInvalidMnemonicMapsError()
+    {
+        MoneroWalletRpc wallet = CreateWalletWithRpcError(MoneroWalletRpcErrorCode.UnknownError,
+            "Electrum-style word list failed verification");
+
+        MoneroRpcError? ex = await Assert.ThrowsAsync<MoneroRpcError>(async () =>
+            await wallet.CreateWallet(new MoneroWalletConfig().SetPath("w").SetPassword("p").SetSeed("bad seed")));
+
+        Assert.That(ex!.Message, Is.EqualTo("Invalid mnemonic"));
+        Assert.That(ex.HasCode(MoneroWalletRpcErrorCode.UnknownError), Is.True);
+        Assert.That(ex.GetRpcMethod(), Is.EqualTo("restore_deterministic_wallet"));
     }
 }
