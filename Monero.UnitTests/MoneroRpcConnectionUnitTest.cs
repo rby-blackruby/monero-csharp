@@ -345,6 +345,59 @@ public class MoneroRpcConnectionUnitTest
         Assert.That(isViewOnly, Is.EqualTo(expected));
     }
 
+    // Invalid responses use code -1 too, but must not be mistaken for the wallet's UnknownError response
+    [Test]
+    public async Task TestIsViewOnlyRethrowsInvalidResponse()
+    {
+        MoneroRpcConnection rpc = CreateRpc(HttpStatusCode.OK, "null");
+        MoneroWalletRpc wallet = new(rpc);
+
+        await Assert.ThrowsAsync<MoneroRpcInvalidResponseError>(async () => await wallet.IsViewOnly());
+    }
+
+    // Transport failures say nothing about the wallet's daemon connection and must not be converted to true
+    [Test]
+    public async Task TestIsConnectedToDaemonRethrowsTransportError()
+    {
+        MoneroRpcConnection rpc = CreateRpc(_ => throw new HttpRequestException("Connection refused"));
+        MoneroWalletRpc wallet = new(rpc);
+
+        await Assert.ThrowsAsync<MoneroRpcError>(async () => await wallet.IsConnectedToDaemon());
+    }
+
+    // HTTP errors are not wallet RPC error responses and must not be converted to true
+    [Test]
+    public async Task TestIsConnectedToDaemonRethrowsHttpError()
+    {
+        MoneroRpcConnection rpc = CreateRpc(HttpStatusCode.BadGateway, "upstream down");
+        MoneroWalletRpc wallet = new(rpc);
+
+        await Assert.ThrowsAsync<MoneroRpcError>(async () => await wallet.IsConnectedToDaemon());
+    }
+
+    // Invalid responses also use code -1, but are not evidence of a successful daemon connection
+    [Test]
+    public async Task TestIsConnectedToDaemonRethrowsInvalidResponse()
+    {
+        MoneroRpcConnection rpc = CreateRpc(HttpStatusCode.OK, "null");
+        MoneroWalletRpc wallet = new(rpc);
+
+        await Assert.ThrowsAsync<MoneroRpcInvalidResponseError>(async () => await wallet.IsConnectedToDaemon());
+    }
+
+    // Genuine wallet RPC error responses retain the existing daemon-connectivity interpretation
+    [TestCase(MoneroWalletRpcErrorCode.NoDaemonConnection, "Failed to connect to daemon", false)]
+    [TestCase(MoneroWalletRpcErrorCode.WrongAddress, "Address not in wallet", true)]
+    public async Task TestIsConnectedToDaemonHandlesRpcErrors(MoneroWalletRpcErrorCode code, string message,
+        bool expected)
+    {
+        MoneroWalletRpc wallet = CreateWalletWithRpcError(code, message);
+
+        bool isConnected = await wallet.IsConnectedToDaemon();
+
+        Assert.That(isConnected, Is.EqualTo(expected));
+    }
+
     // "No wallet file" (-8) must report the wallet as closed instead of falling through to the catch-all
     [Test]
     public async Task TestIsClosedReturnsTrueWhenNoWalletFile()
