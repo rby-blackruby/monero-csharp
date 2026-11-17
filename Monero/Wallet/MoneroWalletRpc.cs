@@ -530,19 +530,20 @@ public class MoneroWalletRpc : IMoneroWallet
         {
             var result = await _rpc.SendCommandAsync<MoneroJsonRpcParams, MoneroSyncResponse>("refresh", parameters);
             await Poll();
-            _syncSem.Release();
             return result;
         }
         catch (MoneroError err)
         {
-            _syncSem.Release();
-
             if (err.Message.Equals("no connection to daemon"))
             {
                 throw new MoneroError("Wallet is not connected to daemon");
             }
 
             throw;
+        }
+        finally
+        {
+            _syncSem.Release();
         }
     }
 
