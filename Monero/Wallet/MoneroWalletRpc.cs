@@ -291,6 +291,10 @@ public class MoneroWalletRpc : IMoneroWallet
             await _rpc.SendCommandAsync<MoneroJsonRpcParams, MoneroRpcResponse>("query_key", parameters);
             return false; // key retrieval succeeds if not view-only
         }
+        catch (MoneroRpcInvalidResponseError)
+        {
+            throw;
+        }
         catch (MoneroError e)
         {
             if (e.HasCode(MoneroWalletRpcErrorCode.WatchOnly))
@@ -359,7 +363,7 @@ public class MoneroWalletRpc : IMoneroWallet
                 ""); // TODO (monero-project): provide better way to know if wallet rpc is connected to daemon
             throw new Exception("check reserve expected to fail");
         }
-        catch (MoneroRpcError e)
+        catch (MoneroRpcError e) when (e.GetCode() is < 0 && e is not MoneroRpcInvalidResponseError)
         {
             return !e.Message.Contains("Failed to connect to daemon");
         }
