@@ -534,7 +534,7 @@ public class MoneroWalletRpc : IMoneroWallet
         }
         catch (MoneroError err)
         {
-            if (err.Message.Equals("no connection to daemon"))
+            if (err.Message.ToLower().Equals("no connection to daemon"))
             {
                 throw new MoneroError("Wallet is not connected to daemon");
             }
@@ -1428,7 +1428,8 @@ public class MoneroWalletRpc : IMoneroWallet
         }
         catch (MoneroRpcError e)
         {
-            return e.HasCode(MoneroWalletRpcErrorCode.WrongTxId) && e.Message.Contains("No wallet file");
+            // Used to check for -8 (WrongTxId); monero-wallet-rpc's wallet_rpc_server::not_open() returns WALLET_RPC_ERROR_CODE_NOT_OPEN (-13) with "No wallet file"
+            return e.HasCode(MoneroWalletRpcErrorCode.NotOpen) && e.Message.Contains("No wallet file");
         }
         catch
         {
