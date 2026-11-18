@@ -944,6 +944,127 @@ public class MoneroWalletRpcIntegrationTest : MoneroIntegrationTestBase
             true, true), Is.True);
     }
 
+    // Unreachable wallet RPC must throw MoneroRpcError with null code rather than returning booleans
+    [Test]
+    public async Task TestUnreachableWalletRpcThrowsMoneroRpcError()
+    {
+        using HttpClient httpClient = new() { Timeout = TimeSpan.FromSeconds(5) };
+        MoneroRpcConnection unreachableRpc = new(new Uri("http://127.0.0.1:1"), "", "", httpClient);
+        MoneroWalletRpc unreachableWallet = new(unreachableRpc);
+
+        MoneroRpcError? versionEx = await Assert.ThrowsAsync<MoneroRpcError>(async () =>
+            await unreachableWallet.GetVersion());
+        Assert.That(versionEx!.GetCode(), Is.Null);
+        Assert.That(versionEx.Message, Is.Not.Empty);
+
+        MoneroRpcError? connectedEx = await Assert.ThrowsAsync<MoneroRpcError>(async () =>
+            await unreachableWallet.IsConnectedToDaemon());
+        Assert.That(connectedEx!.GetCode(), Is.Null);
+        Assert.That(connectedEx.Message, Is.Not.Empty);
+
+        MoneroRpcError? viewOnlyEx = await Assert.ThrowsAsync<MoneroRpcError>(async () =>
+            await unreachableWallet.IsViewOnly());
+        Assert.That(viewOnlyEx!.GetCode(), Is.Null);
+        Assert.That(viewOnlyEx.Message, Is.Not.Empty);
+    }
+
+    // Disconnected daemon must report IsConnectedToDaemon() == false and Sync() must throw without deadlocking _syncSem
+    [Test]
+    public async Task TestDisconnectedDaemonReturnsFalseAndSyncThrowsWithoutDeadlocking()
+    {
+        MoneroWalletRpc wallet = (MoneroWalletRpc)await CreateWallet(new MoneroWalletConfig());
+        Assert.That(await wallet.IsConnectedToDaemon(), Is.True);
+
+        try
+        {
+            await wallet.StopSyncing();
+            MoneroRpcConnection deadDaemon = new(new Uri("http://127.0.0.1:1"), "", "");
+            await wallet.SetDaemonConnection(deadDaemon, true, null);
+
+            Assert.That(await wallet.IsConnectedToDaemon(), Is.False);
+
+            MoneroError? firstErr = await Assert.CatchAsync<MoneroError>(async () => await wallet.Sync(null, null));
+            Assert.That(firstErr!.Message, Is.EqualTo("Wallet is not connected to daemon"));
+
+            Task secondSync = Task.Run(async () =>
+            {
+                await Assert.CatchAsync<MoneroError>(async () => await wallet.Sync(null, null));
+            });
+            Task completed = await Task.WhenAny(secondSync, Task.Delay(TimeSpan.FromSeconds(10)));
+            Assert.That(completed, Is.SameAs(secondSync), "Sync() deadlocked: _syncSem was not released");
+            await secondSync;
+        }
+        finally
+        {
+            await wallet.SetDaemonConnection(Daemon.GetRpcConnection(), true, null);
+            await CloseWallet(wallet);
+        }
+    }
+
+    // Full wallet returns IsViewOnly() == false, while a wallet generated without a spend key returns true
+    [Test]
+    public async Task TestIsViewOnly()
+    {
+        Assert.That(await Wallet.IsViewOnly(), Is.False);
+
+        string primaryAddress = await Wallet.GetPrimaryAddress();
+        string privateViewKey = await Wallet.GetPrivateViewKey();
+
+        IMoneroWallet viewOnlyWallet = await CreateWallet(new MoneroWalletConfig()
+            .SetPrimaryAddress(primaryAddress)
+            .SetPrivateViewKey(privateViewKey)
+            .SetRestoreHeight(await Daemon.GetHeight()));
+        try
+        {
+            Assert.That(await viewOnlyWallet.GetPrimaryAddress(), Is.EqualTo(primaryAddress));
+            Assert.That(await viewOnlyWallet.IsViewOnly(), Is.True);
+
+            await CloseWallet(viewOnlyWallet);
+            MoneroRpcError? closedEx = await Assert.CatchAsync<MoneroRpcError>(async () =>
+                await viewOnlyWallet.IsViewOnly());
+            Assert.That(closedEx!.GetWalletRpcErrorCode(), Is.EqualTo(MoneroWalletRpcErrorCode.NotOpen));
+        }
+        finally
+        {
+            if (!await viewOnlyWallet.IsClosed())
+            {
+                await CloseWallet(viewOnlyWallet);
+            }
+        }
+    }
+
+    // Open wallet returns IsClosed() == false, and returns true after closing
+    [Test]
+    public async Task TestIsClosed()
+    {
+        IMoneroWallet wallet = await CreateWallet(new MoneroWalletConfig());
+        try
+        {
+            Assert.That(await wallet.IsClosed(), Is.False);
+
+            await CloseWallet(wallet);
+            Assert.That(await wallet.IsClosed(), Is.True);
+        }
+        finally
+        {
+            if (!await wallet.IsClosed())
+            {
+                await CloseWallet(wallet);
+            }
+        }
+    }
+
+    // Unreachable wallet RPC produces a transport MoneroRpcError without NotOpen/-13, so IsClosed() returns false
+    [Test]
+    public async Task TestIsClosedReturnsFalseWhenWalletRpcUnreachable()
+    {
+        using HttpClient httpClient = new() { Timeout = TimeSpan.FromSeconds(5) };
+        MoneroRpcConnection unreachableRpc = new(new Uri("http://127.0.0.1:1"), "", "", httpClient);
+        MoneroWalletRpc unreachableWallet = new(unreachableRpc);
+
+        Assert.That(await unreachableWallet.IsClosed(), Is.False);
+    }
+
     #region Test Utils
 
     private static void TestSubaddress(MoneroSubaddress? subaddress)
