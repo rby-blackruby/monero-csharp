@@ -11,5 +11,5 @@ public class JsonRpcApiException(JsonRpcResponseError error, string message, str
 
     public JsonRpcResponseError Error { get; set; } = error;
 
-    public override string Message => string.IsNullOrEmpty(Error.Message) ? base.Message : Error.Message;
+    public override string Message => Error.Message;
 }
