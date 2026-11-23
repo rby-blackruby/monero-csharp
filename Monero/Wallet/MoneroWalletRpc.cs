@@ -228,12 +228,12 @@ public class MoneroWalletRpc : IMoneroWallet
         if (e.Message.Equals("Cannot create wallet. Already exists."))
         {
             throw new MoneroRpcError("Wallet already exists: " + (name ?? "unknown"), e.GetCode(), e.GetRpcMethod(),
-                e.GetRpcParams());
+                e.GetRpcParams(), e);
         }
 
         if (e.Message.Equals("Electrum-style word list failed verification"))
         {
-            throw new MoneroRpcError("Invalid mnemonic", e.GetCode(), e.GetRpcMethod(), e.GetRpcParams());
+            throw new MoneroRpcError("Invalid mnemonic", e.GetCode(), e.GetRpcMethod(), e.GetRpcParams(), e);
         }
 
         // Use this instead of just throw e; so the original stack trace is preseved!
@@ -249,7 +249,7 @@ public class MoneroWalletRpc : IMoneroWallet
 
         if (e.HasCode(MoneroWalletRpcErrorCode.WrongTxId) && e.Message.Contains("TX ID has invalid format"))
         {
-            throw new MoneroRpcError("TX hash has invalid format", e.GetCode(), e.GetRpcMethod(), e.GetRpcParams());
+            throw new MoneroRpcError("TX hash has invalid format", e.GetCode(), e.GetRpcMethod(), e.GetRpcParams(), e);
         }
 
         ExceptionDispatchInfo.Throw(e);
@@ -481,7 +481,7 @@ public class MoneroWalletRpc : IMoneroWallet
                 // Throw MoneroRpcError rather than a plain MoneroError so callers doing `catch (MoneroRpcError)`
                 // still see this failure as an RPC error. Attach method and params are for debugging
                 throw new MoneroRpcError("Invalid payment ID: " + paymentId,
-                    MoneroWalletRpcErrorCode.WrongPaymentId.ToCode(), e.GetRpcMethod(), e.GetRpcParams());
+                    MoneroWalletRpcErrorCode.WrongPaymentId.ToCode(), e.GetRpcMethod(), e.GetRpcParams(), e);
             }
 
             throw;
@@ -1033,7 +1033,7 @@ public class MoneroWalletRpc : IMoneroWallet
             if (e.HasCode(MoneroWalletRpcErrorCode.UnknownError) && e.Message.Equals("basic_string"))
             {
                 e = new MoneroRpcError("Must provide signature to check tx proof",
-                    MoneroWalletRpcErrorCode.UnknownError.ToCode());
+                    MoneroWalletRpcErrorCode.UnknownError.ToCode(), e.GetRpcMethod(), e.GetRpcParams(), e);
             }
 
             HandleInvalidTxIdError(e);
