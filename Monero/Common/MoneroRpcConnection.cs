@@ -51,7 +51,7 @@ public class MoneroRpcConnection(Uri uri, string username, string password, Http
         }
         catch (Exception e)
         {
-            throw new MoneroRpcError(e.Message, null, method, data);
+            throw new MoneroRpcError(e.Message, null, method, data, e);
         }
 
         if (!isSuccessStatusCode)
@@ -74,7 +74,7 @@ public class MoneroRpcConnection(Uri uri, string username, string password, Http
         catch (Exception e)
         {
             throw new MoneroRpcError($"Failed to deserialize RPC response for method '{method}': {e.Message}", null,
-                method, data);
+                method, data, e);
         }
 
         if (response == null)
