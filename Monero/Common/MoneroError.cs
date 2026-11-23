@@ -13,6 +13,11 @@ public class MoneroError : Exception
         _code = code;
     }
 
+    public MoneroError(string message, int? code, Exception? innerException) : base(message, innerException)
+    {
+        _code = code;
+    }
+
     public MoneroError(Exception e) : base(e.Message) { }
 
     public MoneroError(MoneroError e) : base(e.Message)
