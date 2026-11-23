@@ -205,6 +205,35 @@ public class MoneroRpcConnectionUnitTest
         Assert.That(ex.GetRpcParams(), Is.SameAs(parameters));
     }
 
+    [Test]
+    public void TestJsonRpcApiExceptionMessageTracksError()
+    {
+#pragma warning disable CS0618
+        JsonRpcResponseError original = new(-2, "Original message", null!);
+        JsonRpcApiException ex = new(original);
+        Assert.That(ex.Message, Is.EqualTo("Original message"));
+
+        original.Message = "Updated message";
+        Assert.That(ex.Message, Is.EqualTo("Updated message"));
+
+        ex.Error = new JsonRpcResponseError(-3, "Replacement message", null!);
+        Assert.That(ex.Message, Is.EqualTo("Replacement message"));
+#pragma warning restore CS0618
+    }
+
+    [Test]
+    public void TestJsonRpcApiExceptionMessagePreservesFallback()
+    {
+#pragma warning disable CS0618
+        JsonRpcApiException ex = new(new JsonRpcResponseError(-2, "", null!),
+            "Fallback message", "get_info", null);
+        Assert.That(ex.Message, Is.EqualTo("Fallback message"));
+
+        ex.Error = new JsonRpcResponseError(-3, "Replacement message", null!);
+        Assert.That(ex.Message, Is.EqualTo("Replacement message"));
+#pragma warning restore CS0618
+    }
+
     // A null JSON body must throw MoneroRpcInvalidResponseError rather than a NullReferenceException or fake 500
     [Test]
     public async Task TestSendCommandAsyncNullResponse()
@@ -229,6 +258,8 @@ public class MoneroRpcConnectionUnitTest
 
         Assert.That(ex!.GetCode(), Is.Null);
         Assert.That(ex.GetRpcMethod(), Is.EqualTo("get_balance"));
+        Assert.That(ex.InnerException, Is.InstanceOf<JsonException>());
+        Assert.That(ex.InnerException!.StackTrace, Is.Not.Empty);
     }
 
     // Non-2xx HTTP responses must throw MoneroRpcError with the HTTP status code and body instead of HttpRequestException
@@ -249,13 +280,18 @@ public class MoneroRpcConnectionUnitTest
     [Test]
     public async Task TestSendCommandAsyncTransportError()
     {
-        MoneroRpcConnection rpc = CreateRpc(_ => throw new HttpRequestException("Connection refused"));
+        HttpRequestException original = new("Connection refused", new IOException("Socket failure"));
+        MoneroRpcConnection rpc = CreateRpc(_ => throw original);
 
         MoneroRpcError? ex = await Assert.ThrowsAsync<MoneroRpcError>(async () =>
             await rpc.SendCommandAsync<NoRequestModel, string>("get_version", NoRequestModel.Instance));
 
         Assert.That(ex!.GetCode(), Is.Null);
         Assert.That(ex.Message, Is.EqualTo("Connection refused"));
+        Assert.That(ex.InnerException, Is.SameAs(original));
+        Assert.That(ex.InnerException!.InnerException, Is.SameAs(original.InnerException));
+        Assert.That(ex.InnerException.StackTrace, Is.Not.Empty);
+        Assert.That(ex.GetRpcParams(), Is.SameAs(NoRequestModel.Instance));
         Assert.That(ex.GetRpcMethod(), Is.EqualTo("get_version"));
     }
 
@@ -291,6 +327,7 @@ public class MoneroRpcConnectionUnitTest
         Assert.That(ex!.GetCode(), Is.Null);
         Assert.That(ex.GetRpcMethod(), Is.EqualTo("get_version"));
         Assert.That(ex.Message, Is.Not.Empty);
+        Assert.That(ex.InnerException, Is.InstanceOf<OperationCanceledException>());
     }
 
     // Address-not-in-wallet (-2) must stay a MoneroRpcError rather than being downgraded to plain MoneroError
