@@ -44,6 +44,18 @@ public class MoneroRpcConnectionUnitTest
     private MoneroWalletRpc CreateWalletWithRpcError(MoneroWalletRpcErrorCode code, string message) =>
         new(CreateRpc(HttpStatusCode.OK, RpcErrorJson(code.ToCode(), message)));
 
+    private static void AssertNormalizedErrorPreservesOriginal(MoneroRpcError error, string originalMessage)
+    {
+        Assert.That(error.InnerException, Is.InstanceOf<MoneroRpcError>());
+        MoneroRpcError original = (MoneroRpcError)error.InnerException!;
+        Assert.That(original.Message, Is.EqualTo(originalMessage));
+        Assert.That(original.GetCode(), Is.EqualTo(error.GetCode()));
+        Assert.That(original.GetRpcMethod(), Is.EqualTo(error.GetRpcMethod()));
+        Assert.That(error.GetRpcParams(), Is.Not.Null);
+        Assert.That(original.GetRpcParams(), Is.SameAs(error.GetRpcParams()));
+        Assert.That(original.StackTrace, Does.Contain("SendCommandAsync"));
+    }
+
     private const string PrimaryAddressJson =
         """{"jsonrpc":"2.0","id":"1","result":{"address":"addr","addresses":[{"address":"addr","address_index":0,"label":"","used":false}]}}""";
 
@@ -222,15 +234,18 @@ public class MoneroRpcConnectionUnitTest
     }
 
     [Test]
-    public void TestJsonRpcApiExceptionMessagePreservesFallback()
+    public void TestJsonRpcApiExceptionMessageTracksEmptyError()
     {
 #pragma warning disable CS0618
         JsonRpcApiException ex = new(new JsonRpcResponseError(-2, "", null!),
             "Fallback message", "get_info", null);
-        Assert.That(ex.Message, Is.EqualTo("Fallback message"));
+        Assert.That(ex.Message, Is.Empty);
 
         ex.Error = new JsonRpcResponseError(-3, "Replacement message", null!);
         Assert.That(ex.Message, Is.EqualTo("Replacement message"));
+
+        ex.Error = new JsonRpcResponseError(-4, "", null!);
+        Assert.That(ex.Message, Is.Empty);
 #pragma warning restore CS0618
     }
 
@@ -362,6 +377,7 @@ public class MoneroRpcConnectionUnitTest
         Assert.That(ex.GetWalletRpcErrorCode(), Is.EqualTo(MoneroWalletRpcErrorCode.WrongPaymentId));
         Assert.That(ex.HasCode(MoneroWalletRpcErrorCode.WrongPaymentId), Is.True);
         Assert.That(ex.Message, Is.EqualTo("Invalid payment ID: bad_pid"));
+        AssertNormalizedErrorPreservesOriginal(ex, "Invalid payment ID");
         Assert.That(ex.GetRpcMethod(), Is.EqualTo("make_integrated_address"));
     }
 
@@ -650,6 +666,7 @@ public class MoneroRpcConnectionUnitTest
         Assert.That(ex!.Message, Is.EqualTo("TX hash has invalid format"));
         Assert.That(ex.HasCode(MoneroWalletRpcErrorCode.WrongTxId), Is.True);
         Assert.That(ex.GetRpcMethod(), Is.EqualTo("get_tx_key"));
+        AssertNormalizedErrorPreservesOriginal(ex, "TX ID has invalid format");
     }
 
     // Missing signature ("basic_string", -1) error message is normalized to a readable message
@@ -663,6 +680,13 @@ public class MoneroRpcConnectionUnitTest
 
         Assert.That(ex!.Message, Is.EqualTo("Must provide signature to check tx proof"));
         Assert.That(ex.HasCode(MoneroWalletRpcErrorCode.UnknownError), Is.True);
+        Assert.That(ex.GetRpcMethod(), Is.EqualTo("check_tx_proof"));
+        AssertNormalizedErrorPreservesOriginal(ex, "basic_string");
+        var parameters = (Dictionary<string, object?>)ex.GetRpcParams()!;
+        Assert.That(parameters["txid"], Is.EqualTo("txid"));
+        Assert.That(parameters["address"], Is.EqualTo("addr"));
+        Assert.That(parameters["message"], Is.EqualTo("msg"));
+        Assert.That(parameters["signature"], Is.EqualTo(""));
     }
 
     // Attribute not found (-45) returns null instead of throwing
@@ -690,6 +714,7 @@ public class MoneroRpcConnectionUnitTest
         Assert.That(ex!.Message, Is.EqualTo("Wallet already exists: w"));
         Assert.That(ex.HasCode(MoneroWalletRpcErrorCode.UnknownError), Is.True);
         Assert.That(ex.GetRpcMethod(), Is.EqualTo("create_wallet"));
+        AssertNormalizedErrorPreservesOriginal(ex, "Cannot create wallet. Already exists.");
     }
 
     // Invalid seed error is mapped to "Invalid mnemonic" and keeps code and RPC method
@@ -705,5 +730,6 @@ public class MoneroRpcConnectionUnitTest
         Assert.That(ex!.Message, Is.EqualTo("Invalid mnemonic"));
         Assert.That(ex.HasCode(MoneroWalletRpcErrorCode.UnknownError), Is.True);
         Assert.That(ex.GetRpcMethod(), Is.EqualTo("restore_deterministic_wallet"));
+        AssertNormalizedErrorPreservesOriginal(ex, "Electrum-style word list failed verification");
     }
 }
