@@ -28,6 +28,13 @@ public class MoneroRpcError : MoneroError
         _params = parameters;
     }
 
+    public MoneroRpcError(string message, int? code, string? rpcMethod, object? parameters,
+        Exception? innerException) : base(message, code, innerException)
+    {
+        _rpcMethod = rpcMethod;
+        _params = parameters;
+    }
+
     public MoneroRpcError(MoneroRpcError e) : base(e)
     {
         _rpcMethod = e._rpcMethod;
